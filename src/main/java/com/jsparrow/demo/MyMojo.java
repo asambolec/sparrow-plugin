@@ -38,70 +38,88 @@ public class MyMojo extends AbstractMojo {
   private static final String PROJECT_ROOT = "project_root";
 
   public void execute() throws MojoExecutionException {
+    // We move to temporary directory which will be our workspace location
+    System.setProperty("user.dir", createTemporaryDirectory());
 
+    Framework framework = startFramework();
+    Bundle mainBundle = loadBundles(framework);
+    try {
+      mainBundle.start();
+      stop(framework, mainBundle);
+    } catch (BundleException e) {
+      throw new MojoExecutionException("Bundle start failed", e);
+    }
+  }
+
+  private Bundle loadBundles(Framework framework) {
+    File packagesFile = locateBundleOutputDirectory();
+
+    log.info("Packages location: " + packagesFile.toString());
+    List<Bundle> bundles = new ArrayList<>();
+    Stream.of(packagesFile.listFiles())
+        // Skip org.eclipse.osgi since it is loaded by default with framework
+        .filter(p -> !p.getName().startsWith("org.eclipse.osgi_"))
+        .peek(p -> log.info("Installing: " + p))
+        .forEach(
+            p -> {
+              try {
+                bundles.add(
+                    framework
+                        .getBundleContext()
+                        .installBundle(p.getName(), new FileInputStream(p)));
+              } catch (BundleException | FileNotFoundException e) {
+                log.error(e);
+              }
+            });
+
+    Bundle mainBundle =
+        bundles
+            .stream()
+            .filter(p -> p.getSymbolicName().equals("hellosparrow.core"))
+            .peek(p -> log.info(p.getSymbolicName()))
+            .findFirst()
+            .get();
+    return mainBundle;
+  }
+
+  private File locateBundleOutputDirectory() {
+    return Paths.get(System.getProperty("user.home"))
+        .resolve("git")
+        .resolve("hellosparrow")
+        .resolve("hellosparrow.site")
+        .resolve("target")
+        .resolve("repository")
+        .resolve("plugins")
+        .toFile();
+  }
+
+  private Framework startFramework() throws MojoExecutionException {
     Map<String, String> configuration = new HashMap<>();
     configuration.put(
         Constants.FRAMEWORK_STORAGE_CLEAN, Constants.FRAMEWORK_STORAGE_CLEAN_ONFIRSTINIT);
-    try {
-      System.setProperty("user.dir", Files.createTempDirectory("sparrow").toString());
-      configuration.put(
-          Constants.FRAMEWORK_STORAGE, Files.createTempDirectory("sparrow").toString());
-
-    } catch (IOException e) {
-      throw new MojoExecutionException("Temp file unavailable", e);
-    }
-
-    configuration.put(PROJECT_ROOT, basedir.getAbsolutePath());
+    configuration.put(Constants.FRAMEWORK_STORAGE, createTemporaryDirectory());
     configuration.put(Constants.FRAMEWORK_BOOTDELEGATION, "javax.*,org.xml.*");
     configuration.put(Constants.FRAMEWORK_SYSTEMPACKAGES_EXTRA, "helloworld1.core");
+
+    // Set Eclipse plugin parameter for non GUI execution
+    configuration.put(PROJECT_ROOT, basedir.getAbsolutePath());
+
     ServiceLoader<FrameworkFactory> ffs = ServiceLoader.load(FrameworkFactory.class);
     FrameworkFactory frameworkFactory = ffs.iterator().next();
     Framework framework = frameworkFactory.newFramework(configuration);
     try {
       framework.start();
     } catch (BundleException e) {
-      e.printStackTrace();
+      throw new MojoExecutionException("Unable to start framework", e);
     }
+    return framework;
+  }
 
-    File packagesFile =
-        Paths.get(System.getProperty("user.home"))
-            .resolve("git")
-            .resolve("hellosparrow")
-            .resolve("hellosparrow.site")
-            .resolve("target")
-            .resolve("repository")
-            .resolve("plugins")
-            .toFile();
-
-    log.info("Packages location: " + packagesFile.toString());
-    List<Bundle> budles = new ArrayList<>();
-    Stream.of(packagesFile.listFiles())
-        .filter(p -> !p.getName().startsWith("org.eclipse.osgi_"))
-        .peek(p -> log.info("Installing: " + p))
-        .forEach(
-            p -> {
-              try {
-                budles.add(
-                    framework
-                        .getBundleContext()
-                        .installBundle(p.getName(), new FileInputStream(p)));
-              } catch (BundleException | FileNotFoundException e) {
-                e.printStackTrace();
-              }
-            });
-
-    Bundle mainBundle =
-        budles
-            .stream()
-            .filter(p -> p.getSymbolicName().equals("hellosparrow.core"))
-            .peek(p -> log.info(p.getSymbolicName()))
-            .findFirst()
-            .get();
+  private String createTemporaryDirectory() throws MojoExecutionException {
     try {
-      mainBundle.start();
-      stop(framework, mainBundle);
-    } catch (BundleException e) {
-      throw new MojoExecutionException("Bundle start failed", e);
+      return Files.createTempDirectory("sparrow").toString();
+    } catch (IOException e) {
+      throw new MojoExecutionException("Temp file unavailable", e);
     }
   }
 
